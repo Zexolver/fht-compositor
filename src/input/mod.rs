@@ -3,6 +3,7 @@ pub mod pick_surface_grab;
 pub mod resize_tile_grab;
 pub mod swap_tile_grab;
 pub mod touch_swap;
+pub mod transient_seat;
 
 use std::collections::HashMap;
 use std::time::Duration;
