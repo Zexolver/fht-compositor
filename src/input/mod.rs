@@ -13,11 +13,12 @@ use smithay::backend::input::{
     GestureBeginEvent, GestureEndEvent, GesturePinchUpdateEvent, GestureSwipeUpdateEvent,
     InputBackend, InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
     PointerMotionEvent, ProximityState, TabletToolButtonEvent, TabletToolEvent,
-    TabletToolProximityEvent, TabletToolTipEvent, TabletToolTipState,
+    TabletToolProximityEvent, TabletToolTipEvent, TabletToolTipState, TouchEvent,
 };
 use smithay::desktop::layer_map_for_output;
 use smithay::input::keyboard::{FilterResult, Keysym, ModifiersState};
 use smithay::input::pointer::{self, AxisFrame, ButtonEvent, MotionEvent, RelativeMotionEvent};
+use smithay::input::touch;
 use smithay::reexports::wayland_server::protocol::wl_pointer;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
@@ -161,6 +162,11 @@ impl State {
             InputEvent::GesturePinchEnd { event }       => self.on_gesture_pinch_end::<B>(event),
             InputEvent::GestureHoldBegin { event }      => self.on_gesture_hold_begin::<B>(event),
             InputEvent::GestureHoldEnd { event }        => self.on_gesture_hold_end::<B>(event),
+            InputEvent::TouchDown { event }             => self.on_touch_down::<B>(event),
+            InputEvent::TouchUp { event }               => self.on_touch_up::<B>(event),
+            InputEvent::TouchMotion { event }           => self.on_touch_motion::<B>(event),
+            InputEvent::TouchFrame { event }            => self.on_touch_frame::<B>(event),
+            InputEvent::TouchCancel { event }           => self.on_touch_cancel::<B>(event),
             _ => {}
         }
 
@@ -175,6 +181,12 @@ impl State {
                 .tablet_seat()
                 .add_tablet::<State>(&self.fht.display_handle, &TabletDescriptor::from(&device));
         }
+
+        // Only advertise the touch capability once we actually have a touch-capable device, so
+        // clients don't assume a touchscreen is present when there isn't one.
+        if device.has_capability(DeviceCapability::Touch) && self.fht.seat.get_touch().is_none() {
+            self.fht.seat.add_touch();
+        }
     }
 
     fn on_device_removed<B: InputBackend>(&mut self, device: B::Device) {
@@ -185,6 +197,15 @@ impl State {
             if tablet_seat.count_tablets() == 0 {
                 tablet_seat.clear_tools();
             }
+        }
+
+        // `self.fht.devices` has already had `device` removed by the time we get here.
+        if device.has_capability(DeviceCapability::Touch)
+            && !self.fht.devices.iter().any(|device| {
+                device.has_capability(smithay::reexports::input::DeviceCapability::Touch)
+            })
+        {
+            self.fht.seat.remove_touch();
         }
     }
 
@@ -499,6 +520,35 @@ impl State {
         self.fht.activate_pointer_constraint();
     }
 
+    /// Focus whatever is under a click/tap, shared between [`Self::on_pointer_button`] and
+    /// [`Self::on_touch_down`].
+    ///
+    /// This gives keyboard focus to an on-demand layer-shell, or activates the window underneath,
+    /// clearing keyboard focus entirely if nothing was under the click/tap.
+    fn tap_to_focus(&mut self, focus: Option<&PointerFocus>) {
+        if let Some(focus) = focus {
+            if let Some(layer) = focus
+                .layer_surface
+                .as_ref()
+                .filter(|l| matches!(l.layer(), Layer::Top | Layer::Overlay))
+                .filter(|l| l.can_receive_keyboard_focus())
+            {
+                self.fht.set_on_demand_layer_shell_focus(Some(layer));
+            } else {
+                // No layer focus here. But still, don't reset keyboard focus otherwise
+                self.fht.set_on_demand_layer_shell_focus(None);
+            }
+        } else {
+            self.fht.set_on_demand_layer_shell_focus(None);
+            self.set_keyboard_focus(None);
+        }
+
+        if let Some(window) = focus.and_then(|focus| focus.window.as_ref()) {
+            // FIXME: Here we should raise the window. See handle_focus_follows_mouse
+            self.fht.space.activate_window(window, true);
+        }
+    }
+
     fn on_pointer_button<B: InputBackend>(&mut self, event: B::PointerButtonEvent) {
         let serial = SERIAL_COUNTER.next_serial();
         let button = event.button_code();
@@ -508,28 +558,7 @@ impl State {
         if state == wl_pointer::ButtonState::Pressed && !pointer.is_grabbed() {
             let pointer_loc = pointer.current_location();
             let focus = self.fht.get_pointer_focus(pointer_loc);
-
-            if let Some(ref focus) = focus {
-                if let Some(layer) = focus
-                    .layer_surface
-                    .as_ref()
-                    .filter(|l| matches!(l.layer(), Layer::Top | Layer::Overlay))
-                    .filter(|l| l.can_receive_keyboard_focus())
-                {
-                    self.fht.set_on_demand_layer_shell_focus(Some(&layer));
-                } else {
-                    // No layer focus here. But still, don't reset keyboard focus otherwise
-                    self.fht.set_on_demand_layer_shell_focus(None);
-                }
-            } else {
-                self.fht.set_on_demand_layer_shell_focus(None);
-                self.set_keyboard_focus(None);
-            }
-
-            if let Some(window) = focus.as_ref().and_then(|focus| focus.window.as_ref()) {
-                // FIXME: Here we should raise the window. See handle_focus_follows_mouse
-                self.fht.space.activate_window(&window, true);
-            }
+            self.tap_to_focus(focus.as_ref());
 
             if let Some(button) = event.button() {
                 let mouse_pattern = fht_compositor_config::MousePattern(
@@ -1076,6 +1105,97 @@ impl State {
                 cancelled: event.cancelled(),
             },
         )
+    }
+
+    /// Map a touch event's position onto the compositor space.
+    ///
+    /// Touchscreens are mapped onto a single output, like tablets, see
+    /// [`Self::on_tablet_tool_axis`]. Doing this properly (matching the touchscreen to the output
+    /// it is physically part of) is left as a future improvement.
+    fn touch_location<B: InputBackend, E: AbsolutePositionEvent<B>>(
+        &self,
+        event: &E,
+    ) -> Option<Point<f64, Logical>> {
+        let output_geometry = self.fht.space.outputs().next().map(OutputExt::geometry)?;
+        Some(event.position_transformed(output_geometry.size) + output_geometry.loc.to_f64())
+    }
+
+    fn on_touch_down<B: InputBackend>(&mut self, event: B::TouchDownEvent) {
+        let Some(touch) = self.fht.seat.get_touch() else {
+            return;
+        };
+        let Some(location) = self.touch_location(&event) else {
+            return;
+        };
+
+        // A new touch point appearing focuses whatever is underneath it, same as a click, but
+        // this must not otherwise interfere with the user's pointer (no focus-follows-mouse, no
+        // mousebinds, no interactive move/resize).
+        let focus = self.fht.get_pointer_focus(location);
+        self.tap_to_focus(focus.as_ref());
+
+        touch.down(
+            self,
+            focus.and_then(|focus| focus.surface),
+            &touch::DownEvent {
+                slot: event.slot(),
+                location,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: event.time_msec(),
+            },
+        );
+    }
+
+    fn on_touch_up<B: InputBackend>(&mut self, event: B::TouchUpEvent) {
+        let Some(touch) = self.fht.seat.get_touch() else {
+            return;
+        };
+
+        touch.up(
+            self,
+            &touch::UpEvent {
+                slot: event.slot(),
+                serial: SERIAL_COUNTER.next_serial(),
+                time: event.time_msec(),
+            },
+        );
+    }
+
+    fn on_touch_motion<B: InputBackend>(&mut self, event: B::TouchMotionEvent) {
+        let Some(touch) = self.fht.seat.get_touch() else {
+            return;
+        };
+        let Some(location) = self.touch_location(&event) else {
+            return;
+        };
+
+        let under = self
+            .fht
+            .get_pointer_focus(location)
+            .and_then(|focus| focus.surface);
+        touch.motion(
+            self,
+            under,
+            &touch::MotionEvent {
+                slot: event.slot(),
+                location,
+                time: event.time_msec(),
+            },
+        );
+    }
+
+    fn on_touch_frame<B: InputBackend>(&mut self, _event: B::TouchFrameEvent) {
+        let Some(touch) = self.fht.seat.get_touch() else {
+            return;
+        };
+        touch.frame(self);
+    }
+
+    fn on_touch_cancel<B: InputBackend>(&mut self, _event: B::TouchCancelEvent) {
+        let Some(touch) = self.fht.seat.get_touch() else {
+            return;
+        };
+        touch.cancel(self);
     }
 }
 
