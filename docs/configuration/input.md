@@ -130,6 +130,17 @@ Whether to enable Tap-and-drag. If a tap is shortly followed by the finger being
 Having `drag-lock` enabled will make the dragging process persist even when lifting the finger from the touchpad, and instead
 will require a final tap to let go of the grabbed item.
 
+## Touchscreens
+
+Touchscreens work without any configuration: tapping focuses whatever is underneath, and touch motion/scrolling is left for
+applications to interpret (as they would with a real touchscreen). Like a touchpad, you can disable a specific touchscreen
+using [per-device configuration](#per-device-configuration).
+
+> [!WARNING] Current limitations
+> - Touch is mapped onto a single output, so multi-monitor setups with more than one touch-capable display are not supported yet.
+> - Moving/resizing windows by dragging them with a touchscreen is not implemented, only clicking/tapping and whatever
+>   applications do with raw touch events (scrolling, drawing, ...) works.
+
 ## Per-device configuration
 
 You can configure each registered input device individually. Per-device configuration is a table, which keys can be:
