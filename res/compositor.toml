@@ -243,6 +243,13 @@ Super-Right = "resize-tile"
 
 # ---------------------------------------------------------
 
+# Touch bindings, for touchscreens.
+# SEE: https://nferhat.github.io/fht-compositor/configuration/touchbindings.html
+[touchbinds]
+
+
+# ---------------------------------------------------------
+
 # Window rules
 # SEE: https://nferhat.github.io/fht-compositor/configuration/window-rules.html
 # ---

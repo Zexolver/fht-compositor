@@ -9,6 +9,7 @@ contents itself is broken down into multiple sub-sections:
 - [Key-bindings](./keybindings)
 - [Mouse-bindings](./mousebindings)
 - [Gesture-bindings](./gesturebindings)
+- [Touch-bindings](./touchbindings)
 - [Window rules](./window-rules)
 - [Layer-shell rules](./layer-rules)
 - [Outputs](./outputs)

@@ -136,10 +136,13 @@ Touchscreens work without any configuration: tapping focuses whatever is underne
 applications to interpret (as they would with a real touchscreen). Like a touchpad, you can disable a specific touchscreen
 using [per-device configuration](#per-device-configuration).
 
+Moving/swapping windows by touching them with a number of fingers is opt-in, see [touchbindings](/configuration/touchbindings).
+
 > [!WARNING] Current limitations
 > - Touch is mapped onto a single output, so multi-monitor setups with more than one touch-capable display are not supported yet.
-> - Moving/resizing windows by dragging them with a touchscreen is not implemented, only clicking/tapping and whatever
->   applications do with raw touch events (scrolling, drawing, ...) works.
+> - Resizing windows with a touchscreen is not implemented.
+> - Gesture bindings (see [gesturebindings](/configuration/gesturebindings)) are a touchpad-only concept and do not
+>   trigger from touchscreen swipes.
 
 ## Per-device configuration
 

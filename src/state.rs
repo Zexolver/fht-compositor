@@ -8,6 +8,7 @@ use calloop::futures::Scheduler;
 use fht_compositor_config::{
     BlurOverrides, BorderOverrides, DecorationMode, KeyPattern, ShadowOverrides, VrrMode,
 };
+use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::element::{
     default_primary_scanout_output_compare, PrimaryScanoutOutput, RenderElementStates,
 };
@@ -73,6 +74,7 @@ use crate::cursor::CursorThemeManager;
 use crate::focus::PointerFocus;
 use crate::frame_clock::FrameClock;
 use crate::handlers::session_lock::LockState;
+use crate::input::touch_swap::{TouchPoint, TouchSwap};
 use crate::input::KeyAction;
 use crate::layer::MappedLayer;
 use crate::output::{self, OutputExt, RedrawState};
@@ -731,6 +733,10 @@ pub struct Fht {
     // Pointer focus. This isn't really up to-date (you should use fht.get_pointer_focus if you need
     // accurate results). This is cached to not spam pointer motion events.
     pub pointer_focus: Option<PointerFocus>,
+    /// Touch points not currently part of a two-finger window drag. See `input::touch_swap`.
+    pub touch_points: HashMap<TouchSlot, TouchPoint>,
+    /// An in-progress two-finger touch drag moving/swapping a window. See `input::touch_swap`.
+    pub touch_swap: Option<TouchSwap>,
 
     pub devices: Vec<input::Device>,
 
@@ -971,6 +977,8 @@ impl Fht {
             lock_state: LockState::Unlocked,
             focused_on_demand_layer_shell: None,
             pointer_focus: None,
+            touch_points: HashMap::new(),
+            touch_swap: None,
 
             dnd_icon: None,
             cursor_theme_manager,

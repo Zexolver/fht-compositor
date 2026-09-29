@@ -78,6 +78,9 @@ pub struct Config {
     pub outputs: HashMap<String, Output>,
     pub debug: Debug,
     pub gesturebinds: HashMap<GestureAction, GesturePattern>,
+    /// Actions bound to touching a window with a given number of fingers. Empty (nothing bound) by
+    /// default, see [`TouchAction`].
+    pub touchbinds: HashMap<NonZero<u32>, TouchAction>,
 }
 
 // Custom default implementation to use default_keybinds() as the true default
@@ -100,6 +103,7 @@ impl Default for Config {
             outputs: HashMap::new(),
             debug: Default::default(),
             gesturebinds: Default::default(),
+            touchbinds: Default::default(),
         }
     }
 }
@@ -428,6 +432,18 @@ pub enum MouseAction {
     FocusPreviousWindow,
     FocusNextWorkspace,
     FocusPreviousWorkspace,
+}
+
+/// An action bound to touching a window with a given number of fingers, see [`Config::touchbinds`].
+///
+/// Unlike [`MouseAction`], there is no modifier/button to combine this with, the number of fingers
+/// (the key of [`Config::touchbinds`]) is the only thing that triggers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum TouchAction {
+    /// Move the window around (or swap it with whatever tiled window it ends up on top of), same
+    /// as [`MouseAction::SwapTile`] does for the mouse.
+    SwapTile,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
