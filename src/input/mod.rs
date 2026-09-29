@@ -2,6 +2,7 @@ pub mod actions;
 pub mod pick_surface_grab;
 pub mod resize_tile_grab;
 pub mod swap_tile_grab;
+pub mod touch_swap;
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -1127,6 +1128,7 @@ impl State {
         let Some(location) = self.touch_location(&event) else {
             return;
         };
+        let slot = event.slot();
 
         // A new touch point appearing focuses whatever is underneath it, same as a click, but
         // this must not otherwise interfere with the user's pointer (no focus-follows-mouse, no
@@ -1134,11 +1136,19 @@ impl State {
         let focus = self.fht.get_pointer_focus(location);
         self.tap_to_focus(focus.as_ref());
 
+        let window = focus.as_ref().and_then(|focus| focus.window.clone());
+        if self.touch_swap_down(slot, window, location) {
+            // A second finger just landed on the same window as the only other one down: we took
+            // over to move/swap it, tell the client this touch sequence never happened.
+            touch.cancel(self);
+            return;
+        }
+
         touch.down(
             self,
             focus.and_then(|focus| focus.surface),
             &touch::DownEvent {
-                slot: event.slot(),
+                slot,
                 location,
                 serial: SERIAL_COUNTER.next_serial(),
                 time: event.time_msec(),
@@ -1150,11 +1160,16 @@ impl State {
         let Some(touch) = self.fht.seat.get_touch() else {
             return;
         };
+        let slot = event.slot();
+
+        if self.touch_swap_up(slot) {
+            return;
+        }
 
         touch.up(
             self,
             &touch::UpEvent {
-                slot: event.slot(),
+                slot,
                 serial: SERIAL_COUNTER.next_serial(),
                 time: event.time_msec(),
             },
@@ -1168,6 +1183,11 @@ impl State {
         let Some(location) = self.touch_location(&event) else {
             return;
         };
+        let slot = event.slot();
+
+        if self.touch_swap_motion(slot, location) {
+            return;
+        }
 
         let under = self
             .fht
@@ -1177,7 +1197,7 @@ impl State {
             self,
             under,
             &touch::MotionEvent {
-                slot: event.slot(),
+                slot,
                 location,
                 time: event.time_msec(),
             },
@@ -1195,6 +1215,7 @@ impl State {
         let Some(touch) = self.fht.seat.get_touch() else {
             return;
         };
+        self.touch_swap_cancel();
         touch.cancel(self);
     }
 }
