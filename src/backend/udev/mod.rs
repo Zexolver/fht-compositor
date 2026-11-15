@@ -459,6 +459,23 @@ impl UdevData {
             render_formats,
         );
 
+        // Split display/GPU boards (most ARM SoCs: MediaTek, Rockchip, Allwinner, i.MX, RPi 4...):
+        // the GPU card is render-only, has no KMS resources and can't be added as a DRM device, so
+        // the display card that renders through it has to act as the primary node.
+        //
+        // This doesn't depend on the order devices get added in, since the render-only card never
+        // ends up in `self.devices`.
+        if device_node != self.primary_node
+            && render_node == self.primary_gpu
+            && !self.devices.contains_key(&self.primary_node)
+        {
+            debug!(
+                ?device_node,
+                "Primary node is render-only, using this KMS device as primary"
+            );
+            self.primary_node = device_node;
+        }
+
         if device_node == self.primary_node {
             debug!("Adding primary node");
 
@@ -477,9 +494,12 @@ impl UdevData {
 
             // Init dmabuf support with format list from our primary gpu
             let dmabuf_formats = renderer.dmabuf_formats();
-            let default_feedback = DmabufFeedbackBuilder::new(device_node.dev_id(), dmabuf_formats)
-                .build()
-                .context("Failed to create dmabuf feedback")?;
+            // Advertise the render node: on split display/GPU boards the display card has no
+            // render node that clients could open.
+            let default_feedback =
+                DmabufFeedbackBuilder::new(self.primary_gpu.dev_id(), dmabuf_formats)
+                    .build()
+                    .context("Failed to create dmabuf feedback")?;
             let global = fht
                 .dmabuf_state
                 .create_global_with_default_feedback::<State>(

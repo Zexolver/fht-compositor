@@ -102,6 +102,8 @@ This allows you to make very precise window rules.
 Both are a list of [Regular Expression](https://en.wikipedia.org/wiki/Regular_expression)s. This match conditions
 requires that the window matches only *one* regex from the given regexes.
 
+All `match-*` fields also accept a single value, `match-app-id = "foo"` is the same as `match-app-id = ["foo"]`.
+
 The following window rule matches WebCord, Telegram, and Fractal windows
 
 ```toml
@@ -119,6 +121,22 @@ match-app-id = ["steam_app_*"]
 floating = true
 centered = true
 on-workspace = 5
+```
+
+---
+
+#### `match-content-type`
+
+A list of content types, from the [`content-type-v1`](https://wayland.app/protocols/content-type-v1)
+protocol hint the client sets. Can be `none`, `photo`, `video` or `game`. Windows that don't set the
+hint are `none`.
+
+The following rule matches all games and video players
+
+```toml
+[[rules]]
+match-content-type = ["game", "video"]
+open-on-workspace = 5
 ```
 
 ---

@@ -318,7 +318,7 @@ impl State {
                     (config, paths)
                 }
                 Err(err) => {
-                    error!(?err, "Failed to load configuration, using default");
+                    error!("Failed to load configuration, keeping the current one\n{err}");
                     self.fht.config_ui.show(
                         config_ui::Content::ReloadError { error: err },
                         !self.fht.config.animations.disable,
@@ -724,6 +724,9 @@ pub struct Fht {
     pub seat: Seat<State>,
     pub keyboard: KeyboardHandle<State>,
     pub pointer: PointerHandle<State>,
+    // Accumulated high-resolution scroll (in 1/120ths of a wheel notch), horizontal then vertical,
+    // for scroll bindings, so that they trigger once per notch rather than once per event.
+    pub scroll_binding_accumulator: (f64, f64),
     pub clock: Clock<Monotonic>,
     pub suppressed_keys: HashMap<u32, (KeyPattern, KeyAction)>,
     // We store both the timer and the keysym used to trigger the key action.
@@ -733,8 +736,8 @@ pub struct Fht {
     // on the layer surface. Then, when we update the keyboard focus, we check against the clicked
     // layer surface
     pub focused_on_demand_layer_shell: Option<LayerSurface>,
-    // Pointer focus. This isn't really up to-date (you should use fht.get_pointer_focus if you need
-    // accurate results). This is cached to not spam pointer motion events.
+    // Pointer focus. This isn't really up to-date (you should use fht.get_pointer_focus if you
+    // need accurate results). This is cached to not spam pointer motion events.
     pub pointer_focus: Option<PointerFocus>,
     /// Touch points not currently part of a two-finger window drag. See `input::touch_swap`.
     pub touch_points: HashMap<TouchSlot, TouchPoint>,
@@ -989,6 +992,7 @@ impl Fht {
             seat_state,
             keyboard,
             pointer,
+            scroll_binding_accumulator: (0.0, 0.0),
             mapped_layer_surfaces: HashMap::new(),
             lock_state: LockState::Unlocked,
             focused_on_demand_layer_shell: None,
@@ -2363,6 +2367,12 @@ fn rule_matches(
             }
         }
 
+        if !rule.match_content_type.is_empty()
+            && !rule.match_content_type.contains(&window.content_type())
+        {
+            return false;
+        }
+
         if let Some(rule_output) = rule.on_output.as_ref() {
             if rule_output != current_output {
                 return false;
@@ -2407,6 +2417,10 @@ fn rule_matches(
             {
                 return true;
             }
+        }
+
+        if rule.match_content_type.contains(&window.content_type()) {
+            return true;
         }
 
         if let Some(rule_output) = rule.on_output.as_ref() {

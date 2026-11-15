@@ -602,6 +602,9 @@ impl Workspace {
         if self.tiles.iter().any(|tile| *tile.window() == window) {
             return;
         }
+        // If we are trying to insert a fullscreen window, we will unfullscreen any window that
+        // was in the workspace and insert the current one as the fullscreened one.
+        // FIXME: Configurable?
         self.remove_current_fullscreen();
 
         window.request_bounds(Some(self.output.geometry().size));
@@ -684,6 +687,7 @@ impl Workspace {
             let new_idx = self.tiles.len() - 1;
             // Exception is made for fullscreen since its exclusive.
             self.active_tile_idx = Some(new_idx);
+            self.fullscreened_tile_idx = Some(new_idx);
             new_idx
         } else if let Some(parent_idx) = parent_idx {
             // If there's a parent index, insert it just after to make a logical stacking order.
@@ -1098,8 +1102,56 @@ impl Workspace {
         tile.clear_close_animation_snapshot();
     }
 
+    /// Request a maximized state for the [`Tile`] associated with this [`Window`]
+    pub fn set_maximized(&mut self, window: &Window, maximized: bool, animate: bool) -> bool {
+        let Some(idx) = self.tiles_mut().position(|t| *t.window() == *window) else {
+            return false;
+        };
+
+        if maximized {
+            self.tiles[idx].save_floating_geometry();
+            self.tiles[idx].window().request_maximized(true);
+        } else {
+            self.tiles[idx].window().request_maximized(false);
+            self.fullscreened_tile_idx = None;
+            if !self.tiles[idx].window().tiled() {
+                if let Some(geo) = self.tiles[idx].previous_floating_geometry() {
+                    self.tiles[idx].set_geometry(geo, animate);
+                }
+            }
+        }
+
+        self.arrange_tiles(animate);
+        true
+    }
+
+    /// Request a fullscreen state for the [`Tile`] associated with this [`Window`]
+    pub fn set_fullscreen(&mut self, window: &Window, fullscreen: bool, animate: bool) -> bool {
+        let Some(idx) = self.tiles_mut().position(|t| *t.window() == *window) else {
+            return false;
+        };
+
+        if fullscreen {
+            self.tiles[idx].save_floating_geometry();
+            self.fullscreen_window(window, animate)
+        } else {
+            self.tiles[idx].window().request_fullscreen(false);
+            self.start_fullscreen_fade_in(Some(idx));
+            self.fullscreened_tile_idx = None;
+            if !self.tiles[idx].window().tiled() {
+                if let Some(geo) = self.tiles[idx].previous_floating_geometry() {
+                    self.tiles[idx].set_geometry(geo, animate);
+                }
+            }
+
+            self.arrange_tiles(animate);
+
+            true
+        }
+    }
+
     /// Fullscreen the [`Tile`] associated with this window.
-    pub fn fullscreen_window(&mut self, window: &Window, animate: bool) -> bool {
+    fn fullscreen_window(&mut self, window: &Window, animate: bool) -> bool {
         let Some(idx) = self
             .tiles
             .iter_mut()
@@ -1114,12 +1166,45 @@ impl Workspace {
         }
 
         self.remove_current_fullscreen();
+        self.tiles[idx].window().request_fullscreen(true);
         self.fullscreened_tile_idx = Some(idx);
         self.arrange_tiles(animate);
         if animate {
             self.start_fullscreen_fade_out(idx);
         }
 
+        true
+    }
+
+    /// Request a floating state for the [`Tile`] associated with this [`Window`]
+    pub fn set_floating(&mut self, window: &Window, floating: bool, animate: bool) -> bool {
+        let Some(tile) = self.tiles_mut().find(|t| *t.window() == *window) else {
+            return false;
+        };
+
+        if floating {
+            tile.window().request_tiled(false);
+            if let Some(previous_size) = tile.previous_floating_geometry() {
+                tile.set_geometry(previous_size, animate);
+            }
+        } else {
+            tile.save_floating_geometry();
+            tile.window().request_tiled(true);
+        }
+
+        tile.window().send_configure();
+        self.arrange_tiles(animate);
+        true
+    }
+
+    /// Toggle the floating state of a active tile.
+    pub fn toggle_floating(&mut self, animate: bool) -> bool {
+        let Some(window) = self.active_tile().map(Tile::window).cloned() else {
+            return false;
+        };
+
+        let previous = window.tiled();
+        self.set_floating(&window, previous, animate);
         true
     }
 
@@ -1557,6 +1642,16 @@ impl Workspace {
     }
 
     /// Arrange all the [`Tile`]s in this [`Workspace`]
+    // FIXME: Fuck this function. It's horrible.
+    //
+    // This initially started as a huge copy of DWM's layout functions put inside a huge one with a
+    // match on an enum, but with many layouts (and the code needing to be re-used elsewhere too),
+    // this function is not really nice to have/use.
+    //
+    // Optimally layouts would self-describe into some sort of <impl Layout> trait or whatever and
+    // we'd only care about the high level API exposed.
+    //
+    // This would allow new contributors to add new layouts without having to think about code.
     pub fn arrange_tiles(&mut self, animate: bool) {
         crate::profile_function!();
         let mut output_geometry = self.output.geometry();
@@ -2013,7 +2108,8 @@ impl Workspace {
         }
 
         window.request_size(clamped_size);
-        window.send_configure();
+        // NOTE: don't send a configure here, instead wait for the next refresh cycle
+        // to throttle the requests we send.
 
         // Don't forget to move the tile!
         let tile = self

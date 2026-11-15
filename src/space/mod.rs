@@ -19,7 +19,7 @@ use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement
 use smithay::desktop::WindowSurfaceType;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point, Rectangle};
+use smithay::utils::{IsAlive, Logical, Point, Rectangle};
 pub use tile::{Tile, TileRenderElement};
 #[allow(unused)] // re-export WorkspaceRenderElement for screencopy type bounds
 pub use workspace::{Workspace, WorkspaceId, WorkspaceRenderElement};
@@ -95,6 +95,12 @@ impl Space {
     /// Run periodic clean-up tasks.
     pub fn refresh(&mut self) {
         crate::profile_function!();
+
+        // Clean up if the window is dead
+        // FIXME: Animate out but since the window is dead I kinda have nothing todo about it
+        let _ = self
+            .interactive_swap
+            .take_if(|swap| !swap.tile.window().alive());
 
         if let Some(InteractiveSwap {
             tile,
@@ -616,20 +622,10 @@ impl Space {
     }
 
     /// Maximize the [`Tile`] associated with this [`Window`].
-    pub fn maximize_window(&mut self, window: &Window, maximize: bool, animate: bool) -> bool {
+    pub fn set_maximized(&mut self, window: &Window, maximize: bool, animate: bool) -> bool {
         for monitor in &mut self.monitors {
             for workspace in monitor.workspaces_mut() {
-                let mut arrange = false;
-                for tile in workspace.tiles_mut() {
-                    if tile.window() == window {
-                        window.request_maximized(maximize);
-                        arrange = true;
-                        break;
-                    }
-                }
-
-                if arrange {
-                    workspace.arrange_tiles(animate);
+                if workspace.set_maximized(window, maximize, animate) {
                     return true;
                 }
             }
@@ -642,17 +638,7 @@ impl Space {
     pub fn float_window(&mut self, window: &Window, floating: bool, animate: bool) -> bool {
         for monitor in &mut self.monitors {
             for workspace in monitor.workspaces_mut() {
-                let mut arrange = false;
-                for tile in workspace.tiles_mut() {
-                    if tile.window() == window {
-                        window.request_tiled(!floating);
-                        arrange = true;
-                        break;
-                    }
-                }
-
-                if arrange {
-                    workspace.arrange_tiles(animate);
+                if workspace.set_floating(window, floating, animate) {
                     return true;
                 }
             }
@@ -662,10 +648,10 @@ impl Space {
     }
 
     /// Fullscreen the [`Tile`] associated with this [`Window`].
-    pub fn fullscreen_window(&mut self, window: &Window, animate: bool) -> bool {
+    pub fn set_fullscreen(&mut self, window: &Window, fullscreen: bool, animate: bool) -> bool {
         for monitor in &mut self.monitors {
             for workspace in monitor.workspaces_mut() {
-                if workspace.fullscreen_window(window, animate) {
+                if workspace.set_fullscreen(window, fullscreen, animate) {
                     return true;
                 }
             }
